@@ -22,6 +22,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="MonteCarloTreeSearch.py" />
+    <Compile Include="ReactionExtractor.py" />
     <Compile Include="TrainingModel.py" />
     <Compile Include="Retrosynthesis.py" />
     <Compile Include="UtilityFunctions.py" />

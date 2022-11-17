@@ -27,7 +27,7 @@ def RunReaction(Reaction, Reactants):
         Reactants = RDKit Reactant (tuple)
 
     Output:
-        
+        Outcome   = RDKit Products (tuple)
     """
     try:
         Outcome = Reaction.RunReactants(Reactants)
@@ -36,4 +36,37 @@ def RunReaction(Reaction, Reactants):
         Outcome = []
 
     if Outcome:
+        for outcome in Outcome:
+            for mol in outcome:
+                try:
+                    Chem.SanitizeMol(mol)
+                except ValueError:
+                    print("Problem with sanitizing molecule, passing original SMILES format")
+                    continue
+
+    return Outcome
+
+def RewardFunction(Mols):
+    """
+    Received RDKit molecule then calculating reward score based on is there any similar molecule in dataset.
+
+    Input:
+        Mols = RDKit molecules (tuple)
+
+    Output:
+        Reward = Reward score
+    """
+    Reward = 0
+    for mol in Mols:
         pass
+
+def ActionValue(Node, Exploration=3.0):
+    """
+    
+    """
+    Q = Node.GetActionValue()/Node.GetNumVisited()
+    U = Exploration*Node.GetPriorProbability()*np.sqrt(Node.GetParentNode().GetNumVisited())/(1 + Node.GetNumVisited())
+    return Q + U
+
+def UpdateActionValue(ParentNode, LMAX=10, DAMPING=0.99):
+    pass

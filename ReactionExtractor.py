@@ -1,4 +1,5 @@
 import re
+from numpy.random import shuffle
 from copy import deepcopy
 from rdkit import Chem
 from rdkit.Chem import AllChem
@@ -306,4 +307,149 @@ def ReassignAtomMapping(Transform):
         Replacements.append(ReplacementDict[label])
     TransformNewmaps = re.sub('\:[0-9]+\]', lambda match: (':' + Replacements.pop(0) + ']'), Transform)
     return TransformNewmaps
+
+def GetStrictSMARTSAtom(Atom):
+    Symbol = Atom.GetSmarts()
+    if Atom.GetSymbol() == 'H':
+        Symbol = '[#1]'
+    if '[' not in Symbol:
+        Symbol = '[' + Symbol + ']'
+    if USE_STEREOCHEMISTRY:
+        if Atom.GetChiralTag() != Chem.rdchem.ChiralType.CHI_UNSPECIFIED:
+            if '@' not in Symbol:
+                if Atom.GetChiralTag() == Chem.rdchem.ChiralType.CHI_TETRAHEDRAL_CCW:
+                    tag = '@'
+                elif Atom.GetChiralTag() == Chem.rdchem.ChiralType.CHI_TETRAHEDRAL_CW:
+                    tag = '@@'
+                if ':' in Symbol:
+                    Symbol = Symbol.replace(':', ';{}:'.format(tag))
+                else:
+                    Symbol = Symbol.replace(']', ';{}]'.format(tag))
+    if 'H' not in Symbol:
+        H_Symbol = 'H{}'.format(Atom.GetTotalNumHs())
+        if ':' in Symbol:
+            Symbol = Symbol.replace(':', ';{}:'.format(H_Symbol))
+        else:
+            Symbol = Symbol.replace(']', ';{}]'.format(H_Symbol))
+    if ':' in Symbol:
+        Symbol = Symbol.replace(':', ';D{}:'.format(Atom.GetDegree()))
+    else:
+        Symbol = Symbol.replace(']', ';D{}]'.format(Atom.GetDegree()))
+    if '+' not in Symbol and '-' not in Symbol:
+        Charge       = Atom.GetFormalCharge()
+        ChargeSymbol = '+' if (Charge >= 0) else '-'
+        ChargeSymbol += '{}'.format(abs(Charge))
+        if ':' in Symbol:
+            Symbol = Symbol.replace(':', ';{}:'.format(ChargeSymbol))
+        else:
+            Symbol = Symbol.replace(']', ';{}]'.format(ChargeSymbol))
+    return Symbol
+
+def ExpandChangedAtomTags(ChangedAtomTags, ReactantFragments):
+    Expansion = []
+    AtomTagsReactantFragments = re.findall('\:([0-9]+)\]', ReactantFragments)
+    for atomTag in AtomTagsReactantFragments:
+        if atomTag not in ChangedAtomTags:
+            Expansion.append(atomTag)
+    print('After building reactant fragment, additional labels included: {}'.format(Expansion))
+    return Expansion
+
+def GetFragmentforChangedAtoms(Mols, ChangedAtomTags, Radius=0, Category='Reactants', Expansion=[]):
+    Fragments   = ''
+    MolsChanged = []
+    for mol in Mols:
+        SymbolReplacements = []
+        if Category == 'Reactants':
+            Groups = GetSpecialGroups(mol)
+        else:
+            Groups = []
+        Atom2Use = []
+        for atom in mol.GetAtoms():
+            if ':' in atom.GetSmarts():
+                if atom.GetSmarts().split(':')[1][:-1] in ChangedAtomTags:
+                    Atom2Use.append(atom.GetIdx())
+                    Symbol = GetStrictSMARTSAtom(atom)
+                    if Symbol != atom.GetSmarts():
+                        SymbolReplacements.append((atom.GetIdx(), Symbol))
+                    continue
+        if INCLUDE_ALL_UNMAPPED_REACTANT_ATOMS and len(Atom2Use) > 0:
+            if Category == 'Reactants':
+                for atom in mol.GetAtoms():
+                    if not atom.HasProp('molAtomMapNumber'):
+                        Atom2Use.append(atom.GetIdx())
+        for k in range(Radius):
+            Atom2Use, SymbolReplacements = ExpandAtoms2Use(mol, Atom2Use, Groups, SymbolReplacements)
+        if Category == 'Products':
+            if Expansion:
+                for atom in mol.GetAtoms():
+                    if ':' not in atom.GetSmarts():
+                        continue
+                    Label = atom.GetSmarts().split(':')[1][:-1]
+                    if Label in Expansion and Label not in ChangedAtomTags:
+                        Atom2Use.append(atom.GetIdx())
+                        SymbolReplacements.append((atom.GetIdx(), ConvertAtom2Wildcard(atom)))
+                        print('Expanded label {} to wildcard in products'.format(Label))
+            for atom in mol.GetAtoms():
+                if not atom.HasProp('molAtomMapNumber'):
+                    Atom2Use.append(atom.GetIdx())
+                    Symbol = GetStrictSMARTSAtom(atom)
+                    SymbolReplacements.append((atom.GetIdx(), Symbol))
+        Symbols = [atom.GetSmarts() for atom in mol.GetAtoms()]
+        for (i, symbol) in SymbolReplacements:
+            Symbols[i] = symbol
+        if not Atom2Use:
+            continue
+        TetraConsistent = False
+        NumTetraFlips   = 0
+        while not TetraConsistent and NumTetraFlips < 100:
+            MolCopy = deepcopy(mol)
+            [atom.ClearProp('molAtomMapNumber') for atom in MolCopy.GetAtoms()]
+            ThisFragments   = AllChem.MolFragmentToSmiles(MolCopy, Atom2Use, atomSymbols=Symbols, allHsExplicit=True, isomericSmiles=USE_STEREOCHEMISTRY, allBondExplicit=True)
+            ThisFragmentMol = AllChem.MolFromSmarts(ThisFragments)
+            TetraMapNums    = []
+            for atom in ThisFragmentMol.GetAtoms():
+                if atom.HasProp('molAtomMapNumber'):
+                    atom.SetIsotope(int(atom.GetProp('molAtomMapNumber')))
+                    if atom.GetChiralTag() != Chem.rdchem.ChiralType.CHI_UNSPECIFIED:
+                        TetraMapNums.append(atom.GetProp('molAtomMapNumber'))
+            Map2ID = {}
+            for atom in mol.GetAtoms():
+                if atom.HasProp('molAtomMapNumber'):
+                    atom.SetIsotope(int(atom.GetProp('molAtomMapNumber')))
+                    Map2ID[atom.GetProp('molAtomMapNumber')] = atom.GetIdx()
+            TetraConsistent = True
+            AllMatchedIds   = []
+            FragmentSMILES  = Chem.MolToSmiles(ThisFragmentMol)
+            if FragmentSMILES.count('.') > 5:
+                break
+            for matchedIds in mol.GetSubstructMatches(ThisFragmentMol, useChirality=True):
+                AllMatchedIds.extend(matchedIds)
+            shuffle(TetraMapNums)
+            for tetraMapNum in TetraMapNums:
+                print('Checking consistency of tetrahedral {}'.format(tetraMapNum))
+                if Map2ID[tetraMapNum] not in AllMatchedIds:
+                    TetraConsistent = False
+                    print('@@@@@@@@@@@@@@@@ FRAGMENT DOES NOT MATCH PARENT MOL @@@@@@@@@@@@@@')
+                    print('@@@@@@@@@@@@@@@@ FILPPING CHIRALITY SYMBOL NOW      @@@@@@@@@@@@@@')
+                    PreviousSymbol = Symbols[Map2ID[tetraMapNum]]
+                    if '@@' in PreviousSymbol:
+                        Symbol = PreviousSymbol.replace('@@', '@')
+                    elif '@' in PreviousSymbol:
+                        Symbol = PreviousSymbol.replace('@', '@@')
+                    else:
+                        raise ValueError('Need to modify symbol of tetra atom without @ or @@???')
+                    Symbols[Map2ID[tetraMapNum]] = Symbol
+                    NumTetraFlips += 1
+                    break
+            for atom in mol.GetAtoms():
+                atom.SetIsotope(0)
+        if not TetraConsistent:
+            raise ValueError('Could not find consistent tetrahedral mapping, {} center'.format(len(TetraMapNums)))
+        [atom.ClearProp('molAtomMapNumber') for atom in mol.GetAtoms()]
+        ThisFragment = AllChem.MolFragmentToSmiles(mol, Atom2Use, atomSymbols=Symbols, allHsExplicit=True, isomericSmiles=USE_STEREOCHEMISTRY, allBondExplicit=True)
+        Fragments += '(' + ThisFragment + ').'
+        MolsChanged.append(Chem.MolToSmiles(ClearMapNumber(Chem.MolFromSmiles(Chem.MolToSmiles(mol, True))), True))
+    IntraOnly = (1 == len(MolsChanged))
+    DimerOnly = (1 == len(set(MolsChanged))) and (len(MolsChanged) == 2)
+    return Fragments[:-1], IntraOnly, DimerOnly
 

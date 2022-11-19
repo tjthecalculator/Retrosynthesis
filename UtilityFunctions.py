@@ -13,7 +13,7 @@ def Fingerprint2Array(Mol, Size):
     Output:
         NFP  = Numpy array of fingerprint
     """
-    FP = AllChem.GetMorganFingerprintAsBitVect(Mol, radius=2, useChirality=True, nBits=Size)
+    FP  = AllChem.GetMorganFingerprintAsBitVect(Mol, radius=2, useChirality=True, nBits=Size)
     NFP = np.zeros((0,))
     Chem.DataStructs.ConvertToNumpyArray(FP, NFP)
     return NFP

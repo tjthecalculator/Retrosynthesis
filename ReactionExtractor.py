@@ -453,3 +453,121 @@ def GetFragmentforChangedAtoms(Mols, ChangedAtomTags, Radius=0, Category='Reacta
     DimerOnly = (1 == len(set(MolsChanged))) and (len(MolsChanged) == 2)
     return Fragments[:-1], IntraOnly, DimerOnly
 
+def CanonicalTemplate(Template):
+    TemplateNolabels     = re.sub('\:[0-9]+\]', Template)
+    TemplateNolabelsMols = TemplateNolabels[1:-1].split(').(')
+    TemplateMols         = Template[1:-1].split(').(')
+    for i in range(len(TemplateMols)):
+        NolabelMolFragments  = TemplateNolabelsMols[i].split('.')
+        MolFragments         = TemplateMols[i].split('.')
+        Sortorder            = [j[0] for j in sorted(enumerate(NolabelMolFragments), key=lambda x:x[1])]
+        TemplateNolabelsMols = '.'.join([NolabelMolFragments[j] for j in Sortorder])
+        TemplateMols         = '.'.join([MolFragments[j] for j in Sortorder])
+    Sortorder = [j[0] for j in sorted(enumerate(TemplateNolabelsMols), key=lambda x:x[1])]
+    Template  = '(' + ').('.join([TemplateMols[i] for i in Sortorder]) + ')'
+    return Template
+
+def CanonicalTransform(Transform):
+    TransformReordered = '>>'.join([CanonicalTemplate(x) for x in Transform.split('>>')])
+    return ReassignAtomMapping(TransformReordered)
+
+def GetReactingMols(Mols, ChangedAtomTags):
+    MolsSMILES = []
+    for mol in Mols:
+        for atom in mol.GetAtoms():
+            if ':' in atom.GetSmarts():
+                if atom.GetSmarts().split(':')[1][:-1] in ChangedAtomTags:
+                    SMILES = Chem.MolToSmiles(mol)
+                    if SMILES not in MolsSMILES:
+                        MolsSMILES.append(SMILES)
+                    continue
+    return MolsSMILES
+
+def Extractor(Reaction):
+    Reactants = MolsFromSMILESList(ReplaceDeuterated(Reaction['Reactants']))
+    Products  = MolsFromSMILESList(ReplaceDeuterated(Reaction['Products']))
+    if None in Reactants or None in Products:
+        return {'Reaction_ID':Reaction['ID']}
+    try:
+        for i in range(len(Reactants)):
+            Reactants[i] = AllChem.RemoveHs(Reactants[i])
+        for i in range(len(Products)):
+            Products[i]  = AllChem.RemoveHs(Products[i])
+        [Chem.SanitizeMol(mol) for mol in Reactants + Products]
+        [mol.UpdatePropertyCache() for mol in Reactants + Products]
+    except Exception as e:
+        print(e)
+        print('Could not load SMILES or Sanitize')
+        print('ID: {}'.format(Reaction['ID']))
+        return {'Reaction_ID':Reaction['ID']}
+    AreUnmappedProductAtoms = False
+    ExtraReactantFragment   = ''
+    for product in Products:
+        productAtoms = product.GetAtoms()
+        if sum([atom.HasProp('molAtomMapNumber') for atom in productAtoms]) < len(productAtoms):
+            print('Not all product atoms have atom mapping')
+            print('ID: {}'.format(Reaction['ID']))
+            AreUnmappedProductAtoms = True
+    if AreUnmappedProductAtoms:
+        for product in Products:
+            productAtoms = product.GetAtoms()
+            UnmappedIds  = [atom.GetIdx() for atom in productAtoms if not atom.HasProp('molAtomMapNumber')]
+            if len(UnmappedIds) > MAXIMUM_NUMBER_UNMAPPED_PRODUCT_ATOMS:
+                print('Skip this example - too many unmapped product atoms!')
+                print('ID: {}'.format(Reaction['ID']))
+                return {'Reaction_ID':Reaction['ID']}
+            AtomSymbols = ['[{}]'.format(atom.GetSymbol()) for atom in productAtoms]
+            BondSymbols = ['~' for bond in product.GetBonds()]
+            if UnmappedIds:
+                ExtraReactantFragment += AllChem.MolFragmentToSmiles(product, UnmappedIds, allHsExplicit=True, isomericSmiles=USE_STEREOCHEMISTRY, atomSymbols=AtomSymbols, bondSymbols=BondSymbols) + '.'
+        if ExtraReactantFragment:
+            ExtraReactantFragment = ExtraReactantFragment[:-1]
+            print('Extra reactant fragement: {}'.format(ExtraReactantFragment))
+        ExtraReactantFragment = '.'.join(sorted(list(set(ExtraReactantFragment.split('.')))))
+    if None in Reactants + Products:
+        print('Could not parse all molecules in reaction, skipping')
+        print('ID: {}'.format(Reaction['ID']))
+        return {'Reaction_ID':Reaction['ID']}
+    ChangedAtoms, ChangedAtomTags = GetChangedAtoms(Reactants, Products)
+    if not ChangedAtomTags:
+        print('No atom changed?')
+        print('ID: {}'.format(Reaction['ID']))
+        return {'Reaction_ID':Reaction['ID']}
+    MolsReactants = GetReactingMols(Reactants, ChangedAtomTags)
+    MolsProducts  = GetReactingMols(Products, ChangedAtomTags)
+    try:
+        ReactantFragments, IntraOnly, DimerOnly = GetFragmentforChangedAtoms(Reactants, ChangedAtomTags, Radius=1, Expansion=[], Category='Reactants')
+        ProductFragments, _, _ = GetFragmentforChangedAtoms(Products, ChangedAtomTags, Radius=0, Expansion=ExpandChangedAtomTags(ChangedAtomTags, ReactantFragments), Category='Products')
+    except ValueError as e:
+        print(e)
+        print('ID: {}'.format(Reaction['ID']))
+        return {'Reaction_ID':Reaction['ID']}
+    RXNString         = '{}>>{}'.format(ReactantFragments, ProductFragments)
+    RXNCanonical      = CanonicalTransform(RXNString)
+    RXNCanonicalSplit = RXNCanonical.split('>>')
+    RXNCanonical      = RXNCanonicalSplit[0][1:-1].replace(').(', '.') + RXNCanonicalSplit[1][1:-1].replace(').(', '.')
+    ReactantsString   = RXNCanonical.split('>>')[0]
+    ProductsString    = RXNCanonical.split('>>')[1]
+    RetroCanonical    = ProductsString + '>>' + ReactantsString
+    try:
+        RXN = AllChem.ReactionFromSmarts(RetroCanonical)
+        if RXN.Validate()[1] != 0:
+            print('Could not validate reaction successfully')
+            print('ID: {}'.format(Reaction['ID']))
+            print('Retro Canonical: {}'.format(RetroCanonical))
+            return {'Reaction_ID':Reaction['ID']}
+    except Exception as e:
+        print(e)
+        print('ID: {}'.format(Reaction['ID']))
+        return {'Reaction_ID':Reaction['ID']}
+    Templates = {
+        'Products':MolsProducts,
+        'Reactants':MolsReactants,
+        'Reaction_SMARTS':RetroCanonical,
+        'Intra_Only':IntraOnly,
+        'Dimer_Only':DimerOnly,
+        'Reaction_ID':Reaction['ID'],
+        'Necessary_Reagent':ExtraReactantFragment,
+        'Spectators':Reaction['Spectators']
+        }
+    return Templates

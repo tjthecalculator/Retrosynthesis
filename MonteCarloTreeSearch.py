@@ -120,7 +120,7 @@ class MCTS:
     def __Expansion(self):
         pass
 
-    def Simulation(self):
+    def __Simulation(self):
         pass
 
     def __Update(self):

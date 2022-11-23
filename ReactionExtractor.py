@@ -404,7 +404,7 @@ def GetFragmentforChangedAtoms(Mols, ChangedAtomTags, Radius=0, Category='Reacta
         while not TetraConsistent and NumTetraFlips < 100:
             MolCopy = deepcopy(mol)
             [atom.ClearProp('molAtomMapNumber') for atom in MolCopy.GetAtoms()]
-            ThisFragments   = AllChem.MolFragmentToSmiles(MolCopy, Atom2Use, atomSymbols=Symbols, allHsExplicit=True, isomericSmiles=USE_STEREOCHEMISTRY, allBondExplicit=True)
+            ThisFragments   = AllChem.MolFragmentToSmiles(MolCopy, Atom2Use, atomSymbols=Symbols, allHsExplicit=True, isomericSmiles=USE_STEREOCHEMISTRY, allBondsExplicit=True)
             ThisFragmentMol = AllChem.MolFromSmarts(ThisFragments)
             TetraMapNums    = []
             for atom in ThisFragmentMol.GetAtoms():
@@ -446,7 +446,7 @@ def GetFragmentforChangedAtoms(Mols, ChangedAtomTags, Radius=0, Category='Reacta
         if not TetraConsistent:
             raise ValueError('Could not find consistent tetrahedral mapping, {} center'.format(len(TetraMapNums)))
         [atom.ClearProp('molAtomMapNumber') for atom in mol.GetAtoms()]
-        ThisFragment = AllChem.MolFragmentToSmiles(mol, Atom2Use, atomSymbols=Symbols, allHsExplicit=True, isomericSmiles=USE_STEREOCHEMISTRY, allBondExplicit=True)
+        ThisFragment = AllChem.MolFragmentToSmiles(mol, Atom2Use, atomSymbols=Symbols, allHsExplicit=True, isomericSmiles=USE_STEREOCHEMISTRY, allBondsExplicit=True)
         Fragments += '(' + ThisFragment + ').'
         MolsChanged.append(Chem.MolToSmiles(ClearMapNumber(Chem.MolFromSmiles(Chem.MolToSmiles(mol, True))), True))
     IntraOnly = (1 == len(MolsChanged))
@@ -454,15 +454,15 @@ def GetFragmentforChangedAtoms(Mols, ChangedAtomTags, Radius=0, Category='Reacta
     return Fragments[:-1], IntraOnly, DimerOnly
 
 def CanonicalTemplate(Template):
-    TemplateNolabels     = re.sub('\:[0-9]+\]', Template)
+    TemplateNolabels     = re.sub('\:[0-9]+\]', ']', Template)
     TemplateNolabelsMols = TemplateNolabels[1:-1].split(').(')
     TemplateMols         = Template[1:-1].split(').(')
     for i in range(len(TemplateMols)):
-        NolabelMolFragments  = TemplateNolabelsMols[i].split('.')
-        MolFragments         = TemplateMols[i].split('.')
-        Sortorder            = [j[0] for j in sorted(enumerate(NolabelMolFragments), key=lambda x:x[1])]
-        TemplateNolabelsMols = '.'.join([NolabelMolFragments[j] for j in Sortorder])
-        TemplateMols         = '.'.join([MolFragments[j] for j in Sortorder])
+        NolabelMolFragments     = TemplateNolabelsMols[i].split('.')
+        MolFragments            = TemplateMols[i].split('.')
+        Sortorder               = [j[0] for j in sorted(enumerate(NolabelMolFragments), key=lambda x:x[1])]
+        TemplateNolabelsMols[i] = '.'.join([NolabelMolFragments[j] for j in Sortorder])
+        TemplateMols[i]         = '.'.join([MolFragments[j] for j in Sortorder])
     Sortorder = [j[0] for j in sorted(enumerate(TemplateNolabelsMols), key=lambda x:x[1])]
     Template  = '(' + ').('.join([TemplateMols[i] for i in Sortorder]) + ')'
     return Template
@@ -484,8 +484,8 @@ def GetReactingMols(Mols, ChangedAtomTags):
     return MolsSMILES
 
 def Extractor(Reaction):
-    Reactants = MolsFromSMILESList(ReplaceDeuterated(Reaction['Reactants']))
-    Products  = MolsFromSMILESList(ReplaceDeuterated(Reaction['Products']))
+    Reactants = MolsFromSMILESList(ReplaceDeuterated(Reaction['Reactants']).split('.'))
+    Products  = MolsFromSMILESList(ReplaceDeuterated(Reaction['Products']).split('.'))
     if None in Reactants or None in Products:
         return {'Reaction_ID':Reaction['ID']}
     try:

@@ -1,6 +1,7 @@
 import os
 
 def Preprocessing(DatasetFolder):
+    import json
     import pandas as pd
     from joblib import Parallel, delayed
     from ReactionExtractor import Extractor
@@ -13,7 +14,7 @@ def Preprocessing(DatasetFolder):
     Datasets['Products']   = DatasetSplit[2]
     Datasets  = Datasets.reset_index().rename(columns={'Index':'ID'})
     Datasets  = Datasets[['ID', 'Reactants', 'Spectators', 'Products']]
-    Templates = Datasets.to_json(orient='records')
+    Templates = json.load(Datasets.to_json(orient='records'))
     Templates = Parallel(n_jobs=-1)(delayed(Extractor)(reaction) for reaction in Templates)
     Templates = pd.read_json(Templates, orient='records')
     Templates = Templates.dropna(subset=['Reaction_SMARTS'])
